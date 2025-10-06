@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="utf-8" />
+  <title>Multi GLB Load • three.js r128</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>html,body{height:100%;margin:0} canvas{display:block}</style>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+</head>
+<body>
+<script>
+  // Scene / Camera / Renderer
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x000000);
+  const camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 0.1, 100);
+  camera.position.set(3, 0, 0);
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(innerWidth, innerHeight);
+  renderer.outputEncoding = THREE.sRGBEncoding;
+  renderer.shadowMap.enabled = true;
+  document.body.appendChild(renderer.domElement);
+  const controls = new THREE.OrbitControls(camera, renderer.domElement);
+
+  // Lights
+  const hemi = new THREE.HemisphereLight(0xffffff, 0x333333, 0.6);
+  scene.add(hemi);
+  const dir = new THREE.DirectionalLight(0xffffff, 1.0);
+  dir.position.set(3, 5, 2);
+  dir.castShadow = true;
+  scene.add(dir);
+
+  // Environment map (cube) สำหรับ reflection ของ PBR
+  const cubeUrls = [
+    'https://threejs.org/examples/textures/cube/Bridge2/posx.jpg',
+    'https://threejs.org/examples/textures/cube/Bridge2/negx.jpg',
+    'https://threejs.org/examples/textures/cube/Bridge2/posy.jpg',
+    'https://threejs.org/examples/textures/cube/Bridge2/negy.jpg',
+    'https://threejs.org/examples/textures/cube/Bridge2/posz.jpg',
+    'https://threejs.org/examples/textures/cube/Bridge2/negz.jpg'
+  ];
+  const envMap = new THREE.CubeTextureLoader().load(cubeUrls);
+  envMap.encoding = THREE.sRGBEncoding;
+  scene.environment = envMap; // IBL
+
+  // Animation helpers
+  const clock = new THREE.Clock();
+  const mixers = []; // รองรับหลายโมเดลที่มีอนิเมชัน
+
+  // GLTF Loader
+  const gltfLoader = new THREE.GLTFLoader();
+
+  // ฟังก์ชันช่วยโหลด GLB หลายไฟล์
+  function loadGLB(url, { position=[0,0,0], rotation=[0,0,0], scale=1 } = {}) {
+    gltfLoader.load(
+      url,
+      (gltf) => {
+        const model = gltf.scene || gltf.scenes[0];
+
+        // ใส่ envMap ให้กับวัสดุ PBR และเปิดเงา
+        model.traverse((node) => {
+          if (node.isMesh) {
+            node.castShadow = true;
+            node.receiveShadow = true;
+            if (node.material && (node.material.isMeshStandardMaterial || node.material.isMeshPhysicalMaterial)) {
+              node.material.envMap = envMap;
+              node.material.needsUpdate = true;
+            }
+          }
+        });
+
+        // ตั้งค่า transform
+        model.position.set(...position);
+        model.rotation.set(...rotation);
+        model.scale.set(scale, scale, scale);
+
+        scene.add(model);
+
+        // ถ้ามีแอนิเมชัน ให้สร้างมิกเซอร์และเล่น
+        if (gltf.animations && gltf.animations.length) {
+          const mixer = new THREE.AnimationMixer(model);
+          gltf.animations.forEach((clip) => mixer.clipAction(clip).play());
+          mixers.push(mixer);
+        }
+      },
+      undefined,
+      (error) => console.error('Error loading GLB:', error)
+    );
+  }
+
+  // เรียกโหลดหลายไฟล์ได้เลย
+  loadGLB('https://itku-14.github.io/star_wars_the_clone_wars_venator_prefab.glb', {
+    position: [0, 0, 0],
+    scale: 1
+  });
+
+  // ตัวอย่างโหลดเพิ่ม (เปลี่ยน URL เป็นไฟล์ของคุณ)
+  loadGLB('https://itku-14.github.io/Name.glb', {
+    position: [-20, 25, 0],
+    scale: 2
+  });
+
+//   loadGLB('https://threejs.org/examples/models/gltf/MetalRoughSpheres/glTF-Binary/MetalRoughSpheres.glb', {
+//     position: [-2.0, 0, 0],
+//     scale: 1
+//   });
+
+  // Resize
+  addEventListener('resize', ()=>{
+    camera.aspect = innerWidth/innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(innerWidth, innerHeight);
+  });
+
+  // Animate
+  let t = 0;
+  (function loop(){
+    const delta = clock.getDelta();
+    // อัปเดตมิกเซอร์ทุกตัว
+    for (const mixer of mixers) mixer.update(delta);
+
+    t += 0.01;
+    dir.position.x = 3 + Math.sin(t) * 1.0;
+
+    renderer.render(scene, camera);
+    requestAnimationFrame(loop);
+  })();
+</script>
+</body>
+</html>
