@@ -1,0 +1,13 @@
+# Blender 4.5.2 LTS MTL File: 'None'
+# www.blender.org
+
+newmtl Astromech
+Ns 250.000000
+Ka 1.000000 1.000000 1.000000
+Ks 0.500000 0.500000 0.500000
+Ni 1.500000
+d 1.000000
+illum 2
+map_Kd Astromech_baseColor.png
+map_Ke Astromech_emissive.png
+map_Bump -bm 1.000000 Astromech_normal.png
