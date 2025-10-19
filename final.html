@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="utf-8" />
+  <title>Star Wars</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    html, body { margin: 0; height: 100%; background: black; overflow: hidden; }
+    canvas { display: block; }
+    #fadeOverlay {
+      position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+      background: black; opacity: 1; z-index: 5; pointer-events: none;
+      transition: opacity 3s ease-out;
+    }
+    #startBtn {
+      position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      background: #000; color: #ffd700; border: 2px solid #ffd700;
+      border-radius: 10px; padding: 15px 30px; font-size: 20px; cursor: pointer;
+      font-family: 'Arial Black', sans-serif; z-index: 10; transition: all 0.3s ease;
+    }
+    #startBtn:hover { background: #222; transform: translate(-50%, -50%) scale(1.05); }
+  </style>
+
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/RGBELoader.js"></script>
+</head>
+<body>
+  <button id="startBtn">เริ่มฉาก STAR WARS</button>
+  <div id="fadeOverlay"></div>
+
+  <script>
+    const scene = new THREE.Scene();
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.outputEncoding = THREE.sRGBEncoding;
+    renderer.shadowMap.enabled = true;
+    document.body.appendChild(renderer.domElement);
+
+    const camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 0.1, 1000);
+    camera.position.set(3, 0, 0);
+
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.target.set(0, 0, 0);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
+    controls.update();
+
+    // === Lights ===
+    const hemi = new THREE.HemisphereLight(0xffffff, 0x333333, 0.6);
+    scene.add(hemi);
+    const dir = new THREE.DirectionalLight(0xffffff, 1.0);
+    dir.position.set(3, 5, 2);
+    dir.castShadow = true;
+    scene.add(dir);
+
+    const clock = new THREE.Clock();
+    const mixers = [];
+    const gltfLoader = new THREE.GLTFLoader();
+    const buttons = [];
+    let uvSphere = null, uvHovered = false;
+    let celSphere = null, celHovered = false;
+
+    // --- Cel Shading Sphere ---
+    const celUniforms = {
+      uTime: { value: 0.0 },
+      uLightDir: { value: new THREE.Vector3(0.4,1.0,0.8).normalize() }
+    };
+
+    const celVert = `
+      uniform float uTime;
+      varying vec3 vNormal;
+      varying vec3 vPosW;
+      void main(){
+        vNormal = normalize(mat3(modelMatrix) * normal);
+        vec3 pos = position;
+        vPosW = (modelMatrix * vec4(pos,1.0)).xyz;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(pos,1.0);
+      }
+    `;
+    const celFrag = `
+      precision mediump float;
+      varying vec3 vNormal;
+      uniform vec3 uLightDir;
+      varying vec3 vPosW;
+      void main(){
+        float diffuse = clamp(dot(vNormal,uLightDir),0.1,1.0);
+        vec3 R = reflect(-uLightDir, vNormal);
+        vec3 V = normalize(cameraPosition - vPosW);
+        float specular = clamp(pow(dot(R,V),32.0),0.0,0.5);
+        if(diffuse<=0.3) specular=0.0;
+        if(diffuse>0.95) diffuse=1.0;
+        else if(diffuse>0.5) diffuse=0.7;
+        else diffuse=0.3;
+        gl_FragColor = vec4(vec3(0.0,0.0,0.5)*diffuse + specular,1.0);
+      }
+    `;
+    const celGeo = new THREE.SphereBufferGeometry(1,64,64);
+    const celMat = new THREE.ShaderMaterial({ vertexShader:celVert, fragmentShader:celFrag, uniforms:celUniforms });
+    celSphere = new THREE.Mesh(celGeo, celMat);
+    celSphere.position.set(-10,0,10);
+    celSphere.scale.set(0.7,0.7,0.7);
+    scene.add(celSphere);
+
+    // === ฟังก์ชันโหลด GLB ===
+    function loadGLB(url,name,pos=[0,0,0],scale=1,rot=[0,0,0]){
+      gltfLoader.load(url,(gltf)=>{
+        const model = gltf.scene || gltf.scenes[0];
+        model.position.set(...pos);
+        model.scale.set(scale,scale,scale);
+        model.rotation.set(...rot);
+        model.name = name;
+
+        model.traverse((node)=>{
+          if(node.isMesh){
+            node.castShadow=true;
+            node.receiveShadow=true;
+            if(node.material){
+              node.material.envMap = scene.environment;
+              if(name==='About'||name==='Material'||name==='Back'||name==='Back2'){
+                node.material.emissive = new THREE.Color(0xffff00);
+                node.material.emissiveIntensity = 0.4;
+              }
+              node.material.needsUpdate=true;
+            }
+          }
+        });
+        scene.add(model);
+        if(name==='About'||name==='Material'||name==='Back'||name==='Back2') buttons.push(model);
+        if(name==='UV') uvSphere = model;
+
+        if(gltf.animations && gltf.animations.length){
+          const mixer = new THREE.AnimationMixer(model);
+          gltf.animations.forEach((clip)=>mixer.clipAction(clip).play());
+          mixers.push(mixer);
+        }
+      });
+    }
+
+    // === โหลด HDRI ก่อน แล้วค่อยโหลดโมเดลทั้งหมด ===
+    const pmremGenerator = new THREE.PMREMGenerator(renderer);
+    pmremGenerator.compileEquirectangularShader();
+    new THREE.RGBELoader()
+      .setDataType(THREE.UnsignedByteType)
+      .load('https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/kloppenheim_02_puresky_1k.hdr', function (hdrEquirect) {
+          const envMap = pmremGenerator.fromEquirectangular(hdrEquirect).texture;
+          scene.background = envMap;
+          scene.environment = envMap;
+          hdrEquirect.dispose();
+          pmremGenerator.dispose();
+
+          // --- โหลดโมเดลหลัง HDRI ---
+          loadGLB('https://itku-14.github.io/star_wars_the_clone_wars_venator_prefab.glb','Venator',[0,0,0],1);
+          loadGLB('https://itku-14.github.io/Name.glb','Title',[-20,25,0],2);
+          loadGLB('https://itku-14.github.io/image.glb','Image',[0,15,-15],7);
+          loadGLB('https://itku-14.github.io/About.glb','About',[0,-1,1.9],0.3,[0,Math.PI/2,0]);
+          loadGLB('https://itku-14.github.io/materialPBR.glb','Material',[0,-1,0],0.3,[0,Math.PI/2,0]);
+          loadGLB('https://itku-14.github.io/back.glb','Back',[-30,15,-14],3,[0,0,0]);
+          loadGLB('https://itku-14.github.io/back.glb','Back2',[-8.6,-1,8.5],0.3,[0,Math.PI,0]);
+          loadGLB('https://itku-14.github.io/UvSphere.glb','UV',[-8,0,10],0.7);
+          loadGLB('https://itku-14.github.io/bb8.glb','BB8',[-2,-1.3,1.5],2,[0,Math.PI/2,0]);
+          loadGLB('https://itku-14.github.io/R2D2.glb','R2D2',[-2,-1.3,-1.3],0.2,[0,Math.PI/2,0]);
+          loadGLB('https://itku-14.github.io/xwing.glb','XWING',[-27,20,-15],1,[0,0,0]);
+          loadGLB('https://itku-14.github.io/stormtrooperwalk.glb','Storm1',[-8,-1.3,0],0.011);
+          loadGLB('https://itku-14.github.io/stormtrooperwalk.glb','Storm2',[-8,-1.3,-1],0.011);
+          loadGLB('https://itku-14.github.io/stormtrooperwalk.glb','Storm3',[-8,-1.3,1],0.011);
+      });
+
+    // --- Hover / Click / Animation Loop --- 
+    const raycaster = new THREE.Raycaster();
+    const mouse = new THREE.Vector2();
+    let hovered = null;
+
+    function onPointerMove(event){
+      mouse.x = (event.clientX / innerWidth) * 2 - 1;
+      mouse.y = -(event.clientY / innerHeight) * 2 + 1;
+    }
+
+    function onClick(event){
+      raycaster.setFromCamera(mouse,camera);
+      const intersects = raycaster.intersectObjects(buttons,true);
+      if(intersects.length>0){
+        const obj = intersects[0].object;
+        const parent = obj.parent;
+        if(parent.name==='About') moveCameraTo(new THREE.Vector3(-16,21,13), new THREE.Vector3(-14,18,0), true);
+        if(parent.name==='Material') moveCameraTo(new THREE.Vector3(-9,0,6), new THREE.Vector3(-9,0,10), true);
+        if(parent.name==='Back'||parent.name==='Back2') moveCameraTo(startPos,startLookAt,false);
+      }
+    }
+
+    window.addEventListener('mousemove', onPointerMove);
+    window.addEventListener('click', onClick);
+
+    const startPos = new THREE.Vector3(3,0,0);
+    const startLookAt = new THREE.Vector3(0,0,0);
+    let cameraMove = null;
+    function moveCameraTo(targetPos,targetLook,lock=false,speed=0.03){
+      cameraMove={targetPos,targetLook,speed,active:true,lock};
+    }
+
+    const audio = new Audio("https://cdn.pixabay.com/download/audio/2022/03/15/audio_7b041a6b9d.mp3?filename=star-wars-theme-123.mp3");
+    audio.loop = true; audio.volume=0.25;
+    const startBtn = document.getElementById("startBtn");
+    const fadeOverlay = document.getElementById("fadeOverlay");
+    startBtn.addEventListener("click",()=>{
+      audio.play().catch(e=>console.log("Autoplay blocked:",e));
+      startBtn.style.display="none";
+      fadeOverlay.style.opacity=0;
+      setTimeout(()=>fadeOverlay.style.display="none",3000);
+    });
+
+    addEventListener('resize',()=>{
+      camera.aspect = innerWidth/innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth,innerHeight);
+    });
+
+    (function loop(){
+      const delta = clock.getDelta();
+      mixers.forEach(m=>m.update(delta));
+
+      celUniforms.uTime.value = performance.now()/1000;
+      celUniforms.uLightDir.value.set(
+        Math.sin(celUniforms.uTime.value)*2.0,
+        Math.cos(celUniforms.uTime.value),
+        Math.sin(celUniforms.uTime.value)
+      ).normalize();
+
+      raycaster.setFromCamera(mouse,camera);
+      const intersects = raycaster.intersectObjects(buttons,true);
+      celHovered = raycaster.intersectObject(celSphere,true).length>0;
+      uvHovered = uvSphere? raycaster.intersectObject(uvSphere,true).length>0 : false;
+
+      if(intersects.length>0){
+        const obj = intersects[0].object;
+        const parent = obj.parent;
+        if(hovered!==parent){ if(hovered) resetColor(hovered); hovered=parent; setHoverColor(hovered); }
+      } else { if(hovered) resetColor(hovered); hovered=null; }
+
+      if(celSphere){
+          celSphere.rotation.x += 0.01;
+          celSphere.rotation.y += 0.02;
+          celSphere.rotation.z += 0.015;
+      }
+      if(uvSphere){
+          uvSphere.rotation.x += 0.01;
+          uvSphere.rotation.y += 0.02;
+          uvSphere.rotation.z += 0.015;
+      }
+
+      if(cameraMove && cameraMove.active){
+        camera.position.lerp(cameraMove.targetPos,cameraMove.speed);
+        controls.target.lerp(cameraMove.targetLook,cameraMove.speed);
+        controls.update();
+        if(camera.position.distanceTo(cameraMove.targetPos)<0.05){
+          camera.position.copy(cameraMove.targetPos);
+          controls.target.copy(cameraMove.targetLook);
+          cameraMove.active=false;
+          controls.enabled = !cameraMove.lock;
+        }
+      }
+
+      controls.update();
+      renderer.render(scene,camera);
+      requestAnimationFrame(loop);
+    })();
+
+    function setHoverColor(model){
+      model.traverse((node)=>{ if(node.isMesh && node.material){
+        node.material.emissive = new THREE.Color(0xff0000);
+        node.material.emissiveIntensity = 1.0;
+      }});
+    }
+    function resetColor(model){
+      model.traverse((node)=>{ if(node.isMesh && node.material){
+        node.material.emissive = new THREE.Color(0xffff00);
+        node.material.emissiveIntensity = 0.4;
+      }});
+    }
+  </script>
+</body>
+</html>
